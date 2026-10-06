@@ -468,6 +468,12 @@ function startHitAnim() {
   hitC.style.display = 'block'; hitShown = false;
   hitStart = performance.now();
   swishSound();
+  try {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance('너 딱 들켰어!');
+    u.lang = 'ko-KR'; u.pitch = 0.7; u.rate = 1.1; u.volume = 1;
+    speechSynthesis.speak(u);
+  } catch (e) {}
   cancelAnimationFrame(hitRAF);
   let whacked = false;
   const IMPACT = 0.55;
@@ -475,7 +481,7 @@ function startHitAnim() {
     const t = (now - hitStart)/1000;
     if (!whacked && t >= IMPACT) { whacked = true; whackSound(); }
     drawHit(t, IMPACT);
-    if (t > 2.2 && !hitShown) { hitShown = true; showOver(); }
+    if (t > 2.6 && !hitShown) { hitShown = true; finishRound(); return; }
     if (t <= 2.4) hitRAF = requestAnimationFrame(frame);
   };
   hitRAF = requestAnimationFrame(frame);
@@ -523,6 +529,17 @@ function drawHit(t, IMPACT) {
   c.strokeStyle = '#d33'; c.lineWidth = 18; c.beginPath(); c.moveTo(P.x+dx*(L-16),P.y+dy*(L-16)); c.lineTo(P.x+dx*L,P.y+dy*L); c.stroke();
   c.fillStyle = '#f2c9a0'; c.beginPath(); c.arc(P.x,P.y,20,0,Math.PI*2); c.fill();
 
+  // 선생님 말풍선
+  if (t > 0.05) {
+    c.save();
+    c.fillStyle = '#fff'; c.strokeStyle = '#000'; c.lineWidth = 5;
+    rr(c,170,12,400,76,24); c.fill(); c.stroke();
+    c.beginPath(); c.moveTo(520,86); c.lineTo(590,60); c.lineTo(560,100); c.closePath(); c.fill();
+    c.fillStyle = '#fff'; c.fillRect(521,82,40,8);
+    c.fillStyle = '#d9182b'; c.font = '52px Jua, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillText('너 딱 들켰어!!', 370, 52);
+    c.restore();
+  }
   // 임팩트 연출
   if (after > 0) {
     if (after < 0.12) { c.fillStyle='rgba(255,255,255,'+(0.9*(1-after/0.12))+')'; c.fillRect(-200,-100,LW+400,LH+200); }
@@ -538,6 +555,11 @@ function drawHit(t, IMPACT) {
     c.save(); c.translate(250,150); c.rotate(-0.15); c.scale(sc,sc);
     c.font = '110px Jua, sans-serif'; c.textAlign='center'; c.lineWidth = 14; c.strokeStyle = '#000';
     c.strokeText('딱!!',0,0); c.fillStyle = '#ffe14c'; c.fillText('딱!!',0,0); c.restore();
+    if (after > 0.9) {
+      c.save(); c.font = '34px Jua, sans-serif'; c.textAlign = 'center'; c.lineWidth = 7; c.strokeStyle = '#000';
+      const msg = '점수 ' + Math.floor(score) + '점 · 처음부터 다시!';
+      c.strokeText(msg, 400, 385); c.fillStyle = '#fff'; c.fillText(msg, 400, 385); c.restore();
+    }
     if (after > 0.35) {
       c.save(); c.translate(250,225); c.rotate(0.1); c.font='44px Jua, sans-serif'; c.textAlign='center'; c.lineWidth=8; c.strokeStyle='#000';
       c.strokeText('아야야야!!',0,0); c.fillStyle='#fff'; c.fillText('아야야야!!',0,0); c.restore();
@@ -545,12 +567,12 @@ function drawHit(t, IMPACT) {
   }
   c.restore();
 }
-function showOver() {
+function finishRound() {
   const s = Math.floor(score);
   $('final').textContent = s;
   if (s > best) { best = s; try{localStorage.setItem('dance-best', best);}catch(e){}; $('bestNum').textContent = best; $('newBest').textContent = '🎉 최고 기록 갱신!'; }
   else $('newBest').textContent = '최고 기록: ' + best;
-  $('over').classList.remove('hidden');
+  startGame(); // 걸리면 자동으로 처음부터 다시 시작
 }
 
 /* ---------- 시작 ---------- */
