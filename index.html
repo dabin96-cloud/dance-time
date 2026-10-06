@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>선생님 몰래 춤추기</title>
+<link href="https://fonts.googleapis.com/css2?family=Jua&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:#111;color:#fff;font-family:'Jua','Apple SD Gothic Neo','Malgun Gothic',sans-serif;overflow:hidden}
+  #wrap{display:flex;flex-direction:column;height:100vh;height:100dvh}
+  #top{flex:1 1 50%;position:relative;min-height:0;background:#cfe8d5}
+  #scene{width:100%;height:100%;display:block}
+  #bottom{flex:1 1 50%;position:relative;min-height:0;background:#000;border-top:6px solid #2b2b2b;transition:border-color .1s}
+  #bottom.danger{border-top-color:#ff2d2d}
+  #cam{width:100%;height:100%;object-fit:cover;transform:scaleX(-1);display:block}
+  #bottom.danger::after{content:"";position:absolute;inset:0;box-shadow:inset 0 0 80px 20px rgba(255,0,0,.55);pointer-events:none}
+  .hud{position:absolute;pointer-events:none;text-shadow:0 2px 6px rgba(0,0,0,.8)}
+  #score{left:14px;top:10px;font-size:clamp(28px,6vw,54px)}
+  #score small{font-size:.4em;opacity:.8;display:block;line-height:1}
+  #best{right:14px;top:12px;font-size:clamp(14px,2.5vw,22px);opacity:.9;text-align:right}
+  #status{left:0;right:0;bottom:12px;text-align:center;font-size:clamp(22px,5vw,44px)}
+  #meter{position:absolute;left:14px;right:14px;bottom:0;height:8px;background:rgba(0,0,0,.4);border-radius:4px;overflow:hidden}
+  #meter i{display:block;height:100%;width:0;background:linear-gradient(90deg,#4cff8a,#ffe14c,#ff4c4c)}
+  #level{left:50%;transform:translateX(-50%);top:10px;font-size:clamp(14px,2.5vw,22px);background:rgba(0,0,0,.45);padding:2px 12px;border-radius:14px}
+  .overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.78);z-index:20;padding:16px}
+  .overlay.hidden{display:none}
+  .card{background:#fff8e6;color:#3b2a1a;border-radius:22px;padding:24px 26px;max-width:460px;width:100%;box-shadow:0 10px 40px rgba(0,0,0,.5);text-align:center}
+  .card h1{font-size:34px;margin-bottom:6px;color:#d9482b}
+  .card p{font-size:16px;line-height:1.5;margin:6px 0}
+  .card label{display:block;margin-top:12px;font-size:15px;text-align:left}
+  .card input[type=range]{width:100%}
+  .card input[type=file]{width:100%;font-family:inherit;font-size:14px;margin-top:4px}
+  button.big{margin-top:16px;font-family:inherit;font-size:26px;background:#ff5a3c;color:#fff;border:0;border-radius:40px;padding:10px 40px;cursor:pointer;box-shadow:0 5px 0 #b9331a}
+  button.big:active{transform:translateY(3px);box-shadow:0 2px 0 #b9331a}
+  #hit{position:fixed;inset:0;width:100%;height:100%;z-index:15;display:none}
+  .note{font-size:13px;opacity:.75}
+  #final{font-size:56px;color:#d9482b;margin:8px 0}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="top"><canvas id="scene"></canvas><div id="level" class="hud">1단계</div></div>
+  <div id="bottom">
+    <video id="cam" playsinline muted></video>
+    <div id="score" class="hud"><small>SCORE</small><span id="scoreNum">0</span></div>
+    <div id="best" class="hud">BEST <span id="bestNum">0</span></div>
+    <div id="status" class="hud"></div>
+    <div id="meter"><i id="meterBar"></i></div>
+  </div>
+</div>
+<canvas id="hit"></canvas>
+
+<div id="start" class="overlay">
+  <div class="card">
+    <h1>🕺 선생님 몰래 춤추기</h1>
+    <p>선생님이 칠판을 보고 있을 때 신나게 춤추세요!<br>선생님이 뒤돌아보면 <b>얼음!</b> 움직이면 방망이로 맞아요 😱</p>
+    <label>🎵 내 음악 불러오기 (선택) — 칠판 볼 때 나오는 곡
+      <input type="file" id="musicFile" accept="audio/*">
+    </label>
+    <p class="note">안 고르면 기본 신나는 비트가 나와요. 선생님이 돌아보면 웅장한 브금으로 바뀝니다.</p>
+    <label>📷 움직임 민감도: <span id="sensVal">5</span>
+      <input type="range" id="sens" min="1" max="10" value="5">
+    </label>
+    <p id="camMsg" class="note"></p>
+    <button class="big" id="startBtn">시작!</button>
+  </div>
+</div>
+
+<div id="over" class="overlay hidden">
+  <div class="card">
+    <h1>걸렸다!! 😵</h1>
+    <p>최종 점수</p>
+    <div id="final">0</div>
+    <p id="newBest"></p>
+    <button class="big" id="retryBtn">다시 하기</button>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+const $ = id => document.getElementById(id);
+const scene = $('scene'), sctx = scene.getContext('2d');
+const hitC = $('hit'), hctx = hitC.getContext('2d');
+const cam = $('cam');
+const bottomEl = $('bottom');
+
+/* ---------- 상태 ---------- */
+let state = 'idle';       // idle | board | warning | looking | caught
+let stateT = 0;           // 현재 상태 경과시간
+let boardDur = 3, lookDur = 1.5;
+let elapsed = 0, score = 0, turn = 0; // turn: 0=칠판 보는 중, 1=뒤돌아봄
+let motion = 0, moveHold = 0;
+let hasCam = false, spaceDown = false;
+let best = 0;
+try { best = +localStorage.getItem('dance-best') || 0; } catch(e){}
+$('bestNum').textContent = best;
+
+/* ---------- 웹캠 & 움직임 감지 ---------- */
+const mc = document.createElement('canvas'); mc.width = 64; mc.height = 48;
+const mctx = mc.getContext('2d', {willReadFrequently:true});
+let prev = null;
+async function initCam() {
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:640,height:480},audio:false});
+    cam.srcObject = s; await cam.play(); hasCam = true;
+  } catch (e) {
+    hasCam = false;
+    $('camMsg').textContent = '⚠ 카메라를 쓸 수 없어요. 대신 스페이스바를 누르고 있으면 "춤추는 중"으로 인식돼요.';
+  }
+}
+function readMotion() {
+  if (!hasCam) { return spaceDown ? 0.2 : 0; }
+  if (cam.readyState < 2) return 0;
+  mctx.drawImage(cam, 0, 0, 64, 48);
+  const d = mctx.getImageData(0, 0, 64, 48).data;
+  const g = new Uint8Array(64*48);
+  for (let i=0;i<g.length;i++) g[i] = (d[i*4]*0.3 + d[i*4+1]*0.59 + d[i*4+2]*0.11)|0;
+  let cnt = 0;
+  if (prev) for (let i=0;i<g.length;i++) if (Math.abs(g[i]-prev[i]) > 28) cnt++;
+  prev = g;
+  return cnt / g.length;
+}
+window.addEventListener('keydown', e => { if (e.code==='Space'){ spaceDown = true; e.preventDefault(); }});
+window.addEventListener('keyup',   e => { if (e.code==='Space') spaceDown = false; });
+$('sens').addEventListener('input', e => $('sensVal').textContent = e.target.value);
+const danceT = () => 0.09 - 0.007 * (+$('sens').value);   // 춤으로 인정하는 기준
+const stillT = () => danceT() * 0.55;                      // 걸리는 기준
+
+/* ---------- 오디오 (WebAudio) ---------- */
+let actx, master, safeGain, userAudio = null, userSrc = null, userGain;
+let safeTimer = null, nextStep = 0, step = 0;
+let grand = null;
+function initAudio() {
+  if (actx) return;
+  actx = new (window.AudioContext || window.webkitAudioContext)();
+  master = actx.createGain(); master.gain.value = 0.8; master.connect(actx.destination);
+  safeGain = actx.createGain(); safeGain.gain.value = 0; safeGain.connect(master);
+}
+$('musicFile').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) return;
+  if (userAudio) { userAudio.pause(); URL.revokeObjectURL(userAudio.src); }
+  userAudio = new Audio(URL.createObjectURL(f)); userAudio.loop = true; userAudio.preload='auto';
+  userSrc = null;
+});
+const midi = n => 440 * Math.pow(2, (n-69)/12);
+function tone(type, freq, t, dur, vol, dest, lp) {
+  const o = actx.createOscillator(), g = actx.createGain();
+  o.type = type; o.frequency.value = freq;
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(vol, t+0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
+  let n = o;
+  if (lp) { const f = actx.createBiquadFilter(); f.type='lowpass'; f.frequency.value=lp; o.connect(f); n=f; }
+  n.connect(g); g.connect(dest);
+  o.start(t); o.stop(t+dur+0.05);
+}
+function kick(t){
+  const o=actx.createOscillator(), g=actx.createGain();
+  o.frequency.setValueAtTime(150,t); o.frequency.exponentialRampToValueAtTime(40,t+0.12);
+  g.gain.setValueAtTime(0.9,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.2);
+  o.connect(g); g.connect(safeGain); o.start(t); o.stop(t+0.25);
+}
+function noiseBuf(){
+  const b=actx.createBuffer(1,actx.sampleRate*0.5,actx.sampleRate), d=b.getChannelData(0);
+  for(let i=0;i<d.length;i++) d[i]=Math.random()*2-1; return b;
+}
+let nbuf;
+function hat(t,vol,dest){
+  const s=actx.createBufferSource(); s.buffer=nbuf;
+  const f=actx.createBiquadFilter(); f.type='highpass'; f.frequency.value=7000;
+  const g=actx.createGain(); g.gain.setValueAtTime(vol,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.05);
+  s.connect(f); f.connect(g); g.connect(dest||safeGain); s.start(t); s.stop(t+0.1);
+}
+const BPM = 120, SIXT = 60/BPM/4;
+const bass = [45,45,48,43];            // Am Am C G (원곡이 아닌 직접 만든 코드 진행)
+const arp  = [[57,60,64,60],[57,60,64,60],[60,64,67,64],[55,59,62,59]];
+function scheduleSafe() {
+  while (nextStep < actx.currentTime + 0.15) {
+    const s = step % 16, bar = Math.floor(step/16) % 4;
+    if (s % 4 === 0) kick(nextStep);
+    if (s % 4 === 2) hat(nextStep, 0.25);
+    else if (s % 2 === 1) hat(nextStep, 0.08);
+    if (s === 4 || s === 12) { // snare-ish clap
+      const sn=actx.createBufferSource(); sn.buffer=nbuf;
+      const f=actx.createBiquadFilter(); f.type='bandpass'; f.frequency.value=1800;
+      const g=actx.createGain(); g.gain.setValueAtTime(0.35,nextStep); g.gain.exponentialRampToValueAtTime(0.001,nextStep+0.15);
+      sn.connect(f); f.connect(g); g.connect(safeGain); sn.start(nextStep); sn.stop(nextStep+0.2);
+    }
+    if (s % 4 === 0 || s === 6 || s === 10) tone('sawtooth', midi(bass[bar]), nextStep, SIXT*3, 0.28, safeGain, 500);
+    if (s % 2 === 0) tone('square', midi(arp[bar][(s/2)%4]+12), nextStep, SIXT*1.6, 0.07, safeGain, 3000);
+    nextStep += SIXT; step++;
+  }
+}
+function startSafeMusic() {
+  if (!actx) return;
+  stopGrand();
+  if (userAudio) {
+    if (!userSrc) { userSrc = actx.createMediaElementSource(userAudio); userGain = actx.createGain(); userSrc.connect(userGain); userGain.connect(master); }
+    userGain.gain.cancelScheduledValues(actx.currentTime);
+    userGain.gain.setTargetAtTime(1, actx.currentTime, 0.03);
+    userAudio.play().catch(()=>{});
+  } else {
+    safeGain.gain.cancelScheduledValues(actx.currentTime);
+    safeGain.gain.setTargetAtTime(1, actx.currentTime, 0.03);
+    if (!safeTimer) { nextStep = actx.currentTime + 0.05; safeTimer = setInterval(scheduleSafe, 25); }
+  }
+}
+function stopSafeMusic() {
+  if (!actx) return;
+  if (userAudio) { if (userGain) userGain.gain.setTargetAtTime(0, actx.currentTime, 0.02); setTimeout(()=>{ if(state!=='board') userAudio.pause(); },120); }
+  safeGain.gain.setTargetAtTime(0, actx.currentTime, 0.02);
+  if (safeTimer) { clearInterval(safeTimer); safeTimer = null; }
+}
+function startGrand() {
+  if (!actx) return;
+  stopGrand();
+  const g = actx.createGain(); g.gain.value = 0; g.connect(master);
+  g.gain.setTargetAtTime(0.9, actx.currentTime, 0.05);
+  const lp = actx.createBiquadFilter(); lp.type='lowpass'; lp.frequency.setValueAtTime(400, actx.currentTime);
+  lp.frequency.linearRampToValueAtTime(2200, actx.currentTime+2.5); lp.connect(g);
+  const oscs = [];
+  [38,45,50,53,57,62].forEach((n,i) => {         // 웅장한 Dm 코드
+    ['sawtooth','square'].forEach((tp,j)=>{
+      const o = actx.createOscillator(), og = actx.createGain();
+      o.type = tp; o.frequency.value = midi(n) * (j? 1.004:1);
+      og.gain.value = i<2 ? 0.16 : 0.07; o.connect(og); og.connect(lp); o.start(); oscs.push(o);
+    });
+  });
+  // 팀파니 + 브라스 스탭
+  let k = 0;
+  const tim = setInterval(() => {
+    const t = actx.currentTime;
+    const o = actx.createOscillator(), tg = actx.createGain();
+    o.type='sine'; o.frequency.setValueAtTime(110,t); o.frequency.exponentialRampToValueAtTime(48,t+0.25);
+    tg.gain.setValueAtTime(1,t); tg.gain.exponentialRampToValueAtTime(0.001,t+0.4);
+    o.connect(tg); tg.connect(g); o.start(t); o.stop(t+0.5);
+    if (k % 4 === 0) [50,57,62,65].forEach(n => tone('sawtooth', midi(n), t, 0.5, 0.18, g, 2500));
+    if (k % 2 === 1) hat(t, 0.2, g);
+    k++;
+  }, 280);
+  grand = { g, oscs, tim };
+}
+function stopGrand() {
+  if (!grand) return;
+  const { g, oscs, tim } = grand; grand = null;
+  clearInterval(tim);
+  g.gain.setTargetAtTime(0, actx.currentTime, 0.04);
+  setTimeout(() => { oscs.forEach(o => { try{o.stop();}catch(e){} }); g.disconnect(); }, 300);
+}
+function whackSound() {
+  if (!actx) return;
+  const t = actx.currentTime;
+  const s=actx.createBufferSource(); s.buffer=nbuf;
+  const f=actx.createBiquadFilter(); f.type='lowpass'; f.frequency.value=3500;
+  const g=actx.createGain(); g.gain.setValueAtTime(1,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.18);
+  s.connect(f); f.connect(g); g.connect(master); s.start(t); s.stop(t+0.25);
+  const o=actx.createOscillator(), og=actx.createGain();
+  o.frequency.setValueAtTime(220,t); o.frequency.exponentialRampToValueAtTime(50,t+0.2);
+  og.gain.setValueAtTime(1,t); og.gain.exponentialRampToValueAtTime(0.001,t+0.3);
+  o.connect(og); og.connect(master); o.start(t); o.stop(t+0.35);
+  // 아야~ 하는 하강음
+  const y=actx.createOscillator(), yg=actx.createGain();
+  y.type='triangle'; y.frequency.setValueAtTime(700,t+0.12); y.frequency.exponentialRampToValueAtTime(220,t+0.7);
+  yg.gain.setValueAtTime(0.0001,t+0.12); yg.gain.exponentialRampToValueAtTime(0.4,t+0.18); yg.gain.exponentialRampToValueAtTime(0.001,t+0.75);
+  y.connect(yg); yg.connect(master); y.start(t+0.12); y.stop(t+0.8);
+}
+function swishSound() {
+  if (!actx) return;
+  const t = actx.currentTime;
+  const s=actx.createBufferSource(); s.buffer=nbuf;
+  const f=actx.createBiquadFilter(); f.type='bandpass'; f.Q.value=2;
+  f.frequency.setValueAtTime(600,t); f.frequency.exponentialRampToValueAtTime(3000,t+0.45);
+  const g=actx.createGain(); g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.6,t+0.35); g.gain.exponentialRampToValueAtTime(0.001,t+0.5);
+  s.connect(f); f.connect(g); g.connect(master); s.start(t); s.stop(t+0.55);
+}
+
+/* ---------- 게임 흐름 ---------- */
+function levelOf(t){ return 1 + Math.floor(t / 15); }
+function pickDurations() {
+  // 시간이 지날수록 칠판 보는 시간은 줄고, 뒤돌아보는 시간은 늘어남
+  const minB = Math.max(0.9, 3.0 - elapsed*0.03), maxB = Math.max(1.8, 6.0 - elapsed*0.07);
+  boardDur = minB + Math.random() * (maxB - minB);
+  lookDur  = Math.min(4.5, 1.2 + elapsed*0.04) + Math.random()*0.8;
+}
+function setState(s) {
+  state = s; stateT = 0;
+  const st = $('status');
+  if (s === 'board') {
+    pickDurations(); startSafeMusic();
+    st.textContent = '💃 춤춰!! 지금이야!'; st.style.color = '#ffe14c';
+    bottomEl.classList.remove('danger');
+  } else if (s === 'warning') {
+    stopSafeMusic(); startGrand();
+    st.textContent = '😨 돌아본다…!'; st.style.color = '#ff9a3c';
+    bottomEl.classList.add('danger');
+  } else if (s === 'looking') {
+    st.textContent = '🧊 얼음!! 움직이지 마!'; st.style.color = '#ff4c4c';
+  }
+}
+function startGame() {
+  initAudio(); if (!nbuf) nbuf = noiseBuf();
+  if (actx.state === 'suspended') actx.resume();
+  elapsed = 0; score = 0; turn = 0; motion = 0; moveHold = 0; prev = null;
+  $('scoreNum').textContent = 0;
+  hitC.style.display = 'none';
+  $('start').classList.add('hidden'); $('over').classList.add('hidden');
+  setState('board');
+}
+function caught() {
+  state = 'caught';
+  stopSafeMusic(); stopGrand();
+  bottomEl.classList.remove('danger');
+  $('status').textContent = '';
+  startHitAnim();
+}
+
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.1, (now - last)/1000); last = now;
+  const raw = readMotion();
+  motion = motion*0.55 + raw*0.45;
+  const dancing = motion > danceT();
+  $('meterBar').style.width = Math.min(100, motion/(danceT()*2)*100) + '%';
+
+  if (state !== 'idle' && state !== 'caught') {
+    elapsed += dt; stateT += dt;
+    $('level').textContent = levelOf(elapsed) + '단계';
+    if (state === 'board') {
+      turn = Math.max(0, turn - dt*6);
+      if (dancing) { score += dt * 100 * Math.min(2, motion/danceT()); }
+      else $('status').textContent = '💃 더 크게 춤춰야 점수!';
+      if (dancing) $('status').textContent = '💃 춤춰!! 지금이야!';
+      if (stateT >= boardDur) { swishSound(); setState('warning'); }
+    } else if (state === 'warning') {
+      turn = Math.min(1, stateT / 0.5);
+      if (dancing) score += dt * 100 * Math.min(2, motion/danceT()); // 돌아보는 중엔 아직 OK
+      if (stateT >= 0.5) setState('looking');
+    } else if (state === 'looking') {
+      turn = 1;
+      // 완전히 돌아본 직후 0.15초는 유예, 그 뒤 움직이면 아웃
+      if (stateT > 0.15) {
+        if (motion > stillT()) moveHold += dt; else moveHold = Math.max(0, moveHold - dt);
+        if (moveHold > 0.18) { caught(); }
+      }
+      if (state === 'looking' && stateT >= lookDur) { moveHold = 0; setState('board'); }
+    }
+    $('scoreNum').textContent = Math.floor(score);
+  }
+  drawScene(now/1000);
+  requestAnimationFrame(loop);
+}
+
+/* ---------- 장면 그리기 (선생님/칠판: 직접 만든 오리지널 캐릭터) ---------- */
+const LW = 800, LH = 400;
+function fit(canvas, ctx) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== Math.round(w*dpr) || canvas.height !== Math.round(h*dpr)) {
+    canvas.width = Math.round(w*dpr); canvas.height = Math.round(h*dpr);
+  }
+  const sc = Math.min(canvas.width/LW, canvas.height/LH);
+  ctx.setTransform(sc,0,0,sc,(canvas.width-LW*sc)/2,(canvas.height-LH*sc)/2);
+  return sc;
+}
+function rr(ctx,x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+function drawScene(t) {
+  const c = sctx;
+  c.setTransform(1,0,0,1,0,0);
+  const grd = c.createLinearGradient(0,0,0,scene.height);
+  grd.addColorStop(0,'#dff0e3'); grd.addColorStop(1,'#bcd9c4');
+  c.fillStyle = grd; c.fillRect(0,0,scene.width,scene.height);
+  fit(scene, c);
+  // 바닥
+  c.fillStyle = '#b98a5a'; c.fillRect(-400,335,LW+800,LH);
+  c.fillStyle = '#a2763f'; for (let x=-400;x<LW+400;x+=70) c.fillRect(x,335,3,LH);
+  // 칠판
+  c.fillStyle = '#8a5a2b'; rr(c,110,25,580,240,10); c.fill();
+  c.fillStyle = '#2f5d46'; rr(c,124,39,552,212,6); c.fill();
+  c.fillStyle = '#d7b27a'; c.fillRect(150,261,500,9);
+  c.strokeStyle = 'rgba(255,255,255,.85)'; c.lineWidth = 3; c.lineCap='round';
+  c.fillStyle = 'rgba(255,255,255,.9)'; c.font = '34px Jua, sans-serif'; c.textAlign='left';
+  c.fillText('오늘의 수업', 150, 85);
+  c.font = '28px Jua, sans-serif';
+  c.fillText('1 + 1 = ?', 150, 135);
+  c.fillText('조용히 공부하기!', 150, 185);
+  c.beginPath(); c.moveTo(480,70); c.lineTo(640,70); c.moveTo(480,100); c.lineTo(600,100); c.stroke();
+  c.beginPath(); c.arc(560,175,28,0,Math.PI*2); c.stroke();
+  // 시계
+  c.fillStyle='#fff'; c.beginPath(); c.arc(745,60,28,0,Math.PI*2); c.fill();
+  c.strokeStyle='#444'; c.lineWidth=3; c.stroke();
+  c.beginPath(); c.moveTo(745,60); c.lineTo(745,42); c.moveTo(745,60); c.lineTo(758,66); c.stroke();
+  drawTeacher(c, t);
+  if (state === 'warning' || state === 'looking') {
+    c.fillStyle = '#ff2d2d'; c.font = '90px Jua, sans-serif'; c.textAlign='center';
+    const p = 1 + Math.sin(t*20)*0.08;
+    c.save(); c.translate(560,110); c.scale(p,p); c.lineWidth=8; c.strokeStyle='#fff'; c.strokeText('!',0,0); c.fillText('!',0,0); c.restore();
+  }
+}
+function drawTeacher(c, t) {
+  const cx = 400, front = turn > 0.5;
+  const w = Math.max(0.14, Math.abs(Math.cos(Math.PI*turn)));
+  const bob = state === 'board' ? Math.sin(t*3)*1.5 : 0;
+  c.save(); c.translate(cx, bob); c.scale(w, 1);
+  // 다리
+  c.fillStyle = '#3a3a5e'; rr(c,-30,285,26,50,5); c.fill(); rr(c,4,285,26,50,5); c.fill();
+  c.fillStyle = '#222'; rr(c,-34,328,32,10,4); c.fill(); rr(c,2,328,32,10,4); c.fill();
+  // 팔 (뒤: 분필 쓰는 팔 / 앞: 방망이 든 팔)
+  c.lineCap = 'round';
+  if (!front) {
+    const sw = Math.sin(t*6)*12;
+    c.strokeStyle = '#e07a5f'; c.lineWidth = 20;
+    c.beginPath(); c.moveTo(38,205); c.lineTo(62+sw*0.4,150+sw*0.3); c.stroke();
+    c.strokeStyle = '#f2c9a0'; c.lineWidth = 14; c.beginPath(); c.moveTo(62+sw*0.4,150+sw*0.3); c.lineTo(70+sw*0.6,120+sw*0.4); c.stroke();
+    c.strokeStyle = '#fff'; c.lineWidth = 5; c.beginPath(); c.moveTo(70+sw*0.6,120); c.lineTo(76+sw*0.6,112); c.stroke();
+    c.strokeStyle = '#e07a5f'; c.lineWidth = 20; c.beginPath(); c.moveTo(-38,205); c.lineTo(-48,265); c.stroke();
+  } else {
+    c.strokeStyle = '#e07a5f'; c.lineWidth = 20;
+    c.beginPath(); c.moveTo(-38,205); c.lineTo(-70,250); c.stroke();
+    c.beginPath(); c.moveTo(38,205); c.lineTo(48,265); c.stroke();
+    c.strokeStyle = '#f2c9a0'; c.lineWidth = 14; c.beginPath(); c.moveTo(-70,250); c.lineTo(-78,268); c.stroke();
+    // 방망이
+    const sh = Math.sin(t*14)*(state==='looking'?3:0);
+    c.strokeStyle = '#a0662c'; c.lineWidth = 11; c.beginPath(); c.moveTo(-78,268); c.lineTo(-108+sh,185); c.stroke();
+    c.strokeStyle = '#d33'; c.lineWidth = 11; c.beginPath(); c.moveTo(-107+sh,189); c.lineTo(-110+sh,180); c.stroke();
+  }
+  // 몸통
+  c.fillStyle = '#e07a5f'; rr(c,-42,190,84,105,16); c.fill();
+  if (front) {
+    c.fillStyle = '#fff'; c.beginPath(); c.moveTo(-16,190); c.lineTo(0,215); c.lineTo(16,190); c.closePath(); c.fill();
+    c.fillStyle = '#c0392b'; c.beginPath(); c.moveTo(0,208); c.lineTo(-7,225); c.lineTo(0,262); c.lineTo(7,225); c.closePath(); c.fill();
+  } else {
+    c.strokeStyle = 'rgba(0,0,0,.12)'; c.lineWidth = 3; c.beginPath(); c.moveTo(0,195); c.lineTo(0,290); c.stroke();
+  }
+  // 머리
+  c.fillStyle = '#f2c9a0'; c.beginPath(); c.arc(0,150,34,0,Math.PI*2); c.fill();
+  if (!front) {
+    c.fillStyle = '#3a2a22'; c.beginPath(); c.arc(0,148,35,0,Math.PI*2); c.fill();
+    c.beginPath(); c.arc(0,108,16,0,Math.PI*2); c.fill();
+    c.fillStyle = '#d33'; c.fillRect(-14,119,28,6);
+  } else {
+    c.fillStyle = '#3a2a22'; c.beginPath(); c.arc(0,146,35,Math.PI*1.02,Math.PI*1.98); c.lineTo(30,140); c.lineTo(-30,140); c.closePath(); c.fill();
+    c.beginPath(); c.arc(0,108,16,0,Math.PI*2); c.fill();
+    c.fillStyle = '#d33'; c.fillRect(-14,119,28,6);
+    // 안경
+    c.strokeStyle = '#222'; c.lineWidth = 3;
+    c.beginPath(); c.arc(-15,155,11,0,Math.PI*2); c.arc(15,155,11,0,Math.PI*2); c.moveTo(-4,155); c.lineTo(4,155); c.stroke();
+    // 눈 (화난 눈)
+    const ang = state==='looking' ? 1 : 0.4;
+    c.fillStyle = '#111'; c.beginPath(); c.arc(-15,156,4,0,Math.PI*2); c.arc(15,156,4,0,Math.PI*2); c.fill();
+    c.strokeStyle = '#111'; c.lineWidth = 4;
+    c.beginPath(); c.moveTo(-28,138+(1-ang)*4); c.lineTo(-6,146+ang*5); c.moveTo(28,138+(1-ang)*4); c.lineTo(6,146+ang*5); c.stroke();
+    // 입
+    c.strokeStyle = '#a33'; c.lineWidth = 4; c.beginPath();
+    if (state==='looking') { c.moveTo(-10,176); c.quadraticCurveTo(0,168,10,176); } else { c.moveTo(-8,174); c.lineTo(8,174); }
+    c.stroke();
+    if (state==='looking') { // 이마 힘줄
+      c.strokeStyle='#d33'; c.lineWidth=2.5; c.beginPath(); c.moveTo(22,128); c.lineTo(28,134); c.moveTo(22,134); c.lineTo(28,128); c.stroke();
+    }
+  }
+  c.restore();
+}
+
+/* ---------- 방망이로 다리 맞는 장면 ---------- */
+let hitStart = 0, hitRAF = 0, hitShown = false;
+function startHitAnim() {
+  hitC.style.display = 'block'; hitShown = false;
+  hitStart = performance.now();
+  swishSound();
+  cancelAnimationFrame(hitRAF);
+  let whacked = false;
+  const IMPACT = 0.55;
+  const frame = (now) => {
+    const t = (now - hitStart)/1000;
+    if (!whacked && t >= IMPACT) { whacked = true; whackSound(); }
+    drawHit(t, IMPACT);
+    if (t > 2.2 && !hitShown) { hitShown = true; showOver(); }
+    if (t <= 2.4) hitRAF = requestAnimationFrame(frame);
+  };
+  hitRAF = requestAnimationFrame(frame);
+}
+function drawHit(t, IMPACT) {
+  const c = hctx;
+  c.setTransform(1,0,0,1,0,0);
+  const g = c.createRadialGradient(hitC.width/2,hitC.height/2,50,hitC.width/2,hitC.height/2,Math.max(hitC.width,hitC.height)*0.7);
+  g.addColorStop(0, t>IMPACT ? '#7a1010' : '#401010'); g.addColorStop(1,'#120505');
+  c.fillStyle = g; c.fillRect(0,0,hitC.width,hitC.height);
+  fit(hitC, c);
+  const after = Math.max(0, t - IMPACT);
+  const shake = after>0 && after<0.6 ? (Math.random()-0.5)*(14*(1-after/0.6)) : 0;
+  c.save(); c.translate(shake, shake*0.6);
+
+  // 학생 다리
+  const wob = after>0 ? Math.sin(after*30)*Math.exp(-after*4)*14 : 0;
+  const leg = (x, hit) => {
+    c.save(); c.translate(x, 0);
+    if (hit) { c.translate(wob*0.4,0); c.rotate(wob*0.004); }
+    c.fillStyle = '#4a7fd6'; rr(c,-30,120,60,95,10); c.fill();      // 반바지
+    c.fillStyle = '#f2c9a0'; rr(c,-22,208,44,150,12); c.fill();     // 다리
+    c.fillStyle = '#fff'; rr(c,-24,350,48,32,6); c.fill();          // 양말
+    c.fillStyle = '#e33'; c.fillRect(-24,364,48,5);
+    c.fillStyle = '#333'; rr(c,-30,380,66,26,10); c.fill();         // 신발
+    if (hit && after>0) { // 빨갛게 부은 자국
+      c.fillStyle = 'rgba(220,40,40,'+Math.min(.85,after*2)+')'; rr(c,-22,265,44,16,6); c.fill();
+      c.strokeStyle = 'rgba(120,0,0,.6)'; c.lineWidth = 3; c.beginPath(); c.moveTo(-18,273); c.lineTo(18,273); c.stroke();
+    }
+    c.restore();
+  };
+  leg(350, false); leg(450, true);
+
+  // 선생님 팔 + 방망이
+  const P = {x:640, y:70};
+  const a0 = -Math.PI/4, a1 = Math.atan2(272-P.y, 455-P.x);
+  const k = Math.min(1, t / IMPACT);
+  const e = k*k*(3-2*k)*0.4 + k*k*k*0.6;            // 점점 빨라지는 스윙
+  const ang = k<1 ? a0 + (a1-a0)*e : a1 + Math.sin(after*25)*Math.exp(-after*6)*0.12;
+  const L = 330, dx = Math.cos(ang), dy = Math.sin(ang);
+  c.lineCap = 'round';
+  c.strokeStyle = '#e07a5f'; c.lineWidth = 46; c.beginPath(); c.moveTo(800,-40); c.lineTo(P.x,P.y); c.stroke();
+  c.strokeStyle = '#f2c9a0'; c.lineWidth = 34; c.beginPath(); c.moveTo(P.x+26,P.y-18); c.lineTo(P.x,P.y); c.stroke();
+  c.strokeStyle = '#a0662c'; c.lineWidth = 18; c.beginPath(); c.moveTo(P.x,P.y); c.lineTo(P.x+dx*L,P.y+dy*L); c.stroke();
+  c.strokeStyle = '#d33'; c.lineWidth = 18; c.beginPath(); c.moveTo(P.x+dx*(L-16),P.y+dy*(L-16)); c.lineTo(P.x+dx*L,P.y+dy*L); c.stroke();
+  c.fillStyle = '#f2c9a0'; c.beginPath(); c.arc(P.x,P.y,20,0,Math.PI*2); c.fill();
+
+  // 임팩트 연출
+  if (after > 0) {
+    if (after < 0.12) { c.fillStyle='rgba(255,255,255,'+(0.9*(1-after/0.12))+')'; c.fillRect(-200,-100,LW+400,LH+200); }
+    // 별
+    for (let i=0;i<7;i++) {
+      const ang2 = i/7*Math.PI*2 + after*3, r = 30 + after*120;
+      c.fillStyle = '#ffe14c'; c.font = '34px sans-serif'; c.textAlign='center';
+      c.globalAlpha = Math.max(0, 1-after*0.8);
+      c.fillText('★', 455 + Math.cos(ang2)*r, 270 + Math.sin(ang2)*r*0.7);
+    }
+    c.globalAlpha = 1;
+    const sc = 1 + Math.exp(-after*8)*0.7;
+    c.save(); c.translate(250,150); c.rotate(-0.15); c.scale(sc,sc);
+    c.font = '110px Jua, sans-serif'; c.textAlign='center'; c.lineWidth = 14; c.strokeStyle = '#000';
+    c.strokeText('딱!!',0,0); c.fillStyle = '#ffe14c'; c.fillText('딱!!',0,0); c.restore();
+    if (after > 0.35) {
+      c.save(); c.translate(250,225); c.rotate(0.1); c.font='44px Jua, sans-serif'; c.textAlign='center'; c.lineWidth=8; c.strokeStyle='#000';
+      c.strokeText('아야야야!!',0,0); c.fillStyle='#fff'; c.fillText('아야야야!!',0,0); c.restore();
+    }
+  }
+  c.restore();
+}
+function showOver() {
+  const s = Math.floor(score);
+  $('final').textContent = s;
+  if (s > best) { best = s; try{localStorage.setItem('dance-best', best);}catch(e){}; $('bestNum').textContent = best; $('newBest').textContent = '🎉 최고 기록 갱신!'; }
+  else $('newBest').textContent = '최고 기록: ' + best;
+  $('over').classList.remove('hidden');
+}
+
+/* ---------- 시작 ---------- */
+$('startBtn').addEventListener('click', async () => {
+  initAudio();
+  if (!hasCam) await initCam();
+  startGame();
+});
+$('retryBtn').addEventListener('click', startGame);
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
